@@ -192,20 +192,36 @@ export function initMessage(
     return { arena: src, segments: [], traversalLimit: DEFAULT_TRAVERSE_LIMIT };
   }
 
-  let buf: ArrayBuffer = src as ArrayBuffer;
+  let buf = src;
 
-  if (isArrayBufferView(buf)) {
-    buf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  if (packed){
+    if (isArrayBufferView(buf)) {
+       buf =  buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
+    buf = unpack(buf);
   }
 
-  if (packed) buf = unpack(buf);
-
   if (singleSegment) {
+    if (isArrayBufferView(buf)) {
+       buf =  buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
     return {
       arena: new SingleSegmentArena(buf),
       segments: [],
       traversalLimit: DEFAULT_TRAVERSE_LIMIT,
     };
+  }
+
+  if (isArrayBufferView(buf)) {
+    if(buf instanceof Uint8Array){
+      return {
+        arena: new MultiSegmentArena(getFramedSegmentsFromUint8Array(buf)),
+        segments: [],
+        traversalLimit: DEFAULT_TRAVERSE_LIMIT,
+      };
+    } else{
+     buf =  buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
   }
 
   return {
@@ -250,6 +266,39 @@ export function getFramedSegments(message: ArrayBuffer): ArrayBuffer[] {
     }
 
     segments[i] = message.slice(byteOffset, byteOffset + byteLength);
+
+    byteOffset += byteLength;
+  }
+
+  return segments;
+}
+
+export function getFramedSegmentsFromUint8Array(message: Uint8Array): ArrayBuffer[] {
+  const dv = new DataView(message.buffer);
+  const startOffset = message.byteOffset;
+  const segmentCount = dv.getUint32(startOffset, true) + 1;
+
+  const segments = new Array(segmentCount) as ArrayBuffer[];
+
+  trace("reading %d framed segments from stream", segmentCount);
+
+  let byteOffset = 4 + segmentCount * 4;
+  byteOffset += byteOffset % 8;
+
+  if (byteOffset + segmentCount * 4 > message.byteLength) {
+    throw new Error(MSG_INVALID_FRAME_HEADER);
+  }
+
+  for (let i = 0; i < segmentCount; i++) {
+    const byteLength = dv.getUint32(startOffset + 4 + i * 4, true) * 8;
+
+    if (byteOffset + byteLength > message.byteLength) {
+      throw new Error(MSG_INVALID_FRAME_HEADER);
+    }
+
+    const dst = message.buffer.slice( startOffset+ byteOffset, startOffset+ byteOffset+ byteLength)
+
+    segments[i] = dst;
 
     byteOffset += byteLength;
   }
